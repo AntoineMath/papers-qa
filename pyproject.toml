@@ -5,6 +5,7 @@ description = "PDF Q&A CLI using FAISS retrieval and Ollama Qwen generation"
 authors = ["Antoine Mathurin <antoine.mathurin.pro@gmail.com>"]
 readme = "README.md"
 packages = [{ include = "papers_qa" }]
+include = ["papers_qa/metadata.jsonl", "papers_qa/pdf_index.faiss"]
 
 [tool.poetry.dependencies]
 python = ">=3.10"

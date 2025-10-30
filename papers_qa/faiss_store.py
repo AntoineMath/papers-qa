@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import dataclass, field
+from importlib import resources
 from typing import List, Tuple, Optional
 import numpy as np
 import faiss
@@ -19,12 +20,13 @@ class FaissStore:
     _index: Optional[faiss.Index] = field(default=None, init=False)
     _metadata: Optional[List[Tuple[str, str, str]]] = field(default=None, init=False)
 
-    def build(self, rebuild: bool = False) -> None:
+    def build(self, rebuild: bool = False, folder_path: Optional[str] = None) -> None:
         if (not rebuild) and os.path.exists(self.index_path) and os.path.exists(self.metadata_path):
             print("Index exists. Use --rebuild to recreate.")
             return
 
-        items = pdf_to_token_chunks(PDF_FOLDER, CHUNK_SIZE, CHUNK_OVERLAP)
+        src_folder = folder_path or PDF_FOLDER
+        items = pdf_to_token_chunks(src_folder, CHUNK_SIZE, CHUNK_OVERLAP)
         if not items:
             raise RuntimeError("No PDF chunks found.")
 
@@ -32,6 +34,7 @@ class FaissStore:
         try:
             oc = OllamaClient()
             oc.ensure_ready()
+            print(f"checking model '{EMBED_MODEL}' (download if missing)...", flush=True)
             oc.ensure_model(EMBED_MODEL)
         except Exception as e:
             raise RuntimeError(f"Ollama embeddings not available ({e}). Ensure Ollama is running and model '{EMBED_MODEL}' exists.")
@@ -85,23 +88,49 @@ class FaissStore:
     def load_index(self) -> faiss.Index:
         if self._index is not None:
             return self._index
-        if not os.path.exists(self.index_path):
-            raise FileNotFoundError(f"FAISS index not found: {self.index_path}")
-        self._index = faiss.read_index(self.index_path)
+        if os.path.exists(self.index_path):
+            self._index = faiss.read_index(self.index_path)
+            return self._index
+
+        # Fallback: try packaged resource papers_qa/pdf_index.faiss
+        try:
+            with resources.files("papers_qa").joinpath("pdf_index.faiss").open("rb") as f:
+                # faiss can read from file path only; write to a temp file
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".faiss", delete=False) as tmp:
+                    tmp.write(f.read())
+                    tmp.flush()
+                    self._index = faiss.read_index(tmp.name)
+                return self._index
+        except FileNotFoundError:
+            pass
+        raise FileNotFoundError(f"FAISS index not found: {self.index_path}")
         return self._index
 
     def load_metadata(self) -> List[Tuple[str, str, str]]:
         if self._metadata is not None:
             return self._metadata
-        if not os.path.exists(self.metadata_path):
-            raise FileNotFoundError(f"Metadata file not found: {self.metadata_path}")
-        items: List[Tuple[str, str, str]] = []
-        with open(self.metadata_path, "r", encoding="utf-8") as f:
-            for line in f:
-                obj = json.loads(line)
-                items.append((obj["file"], obj["section"], obj["chunk"]))
-        self._metadata = items
-        return items
+        if os.path.exists(self.metadata_path):
+            items: List[Tuple[str, str, str]] = []
+            with open(self.metadata_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    obj = json.loads(line)
+                    items.append((obj["file"], obj["section"], obj["chunk"]))
+            self._metadata = items
+            return items
+
+        # Fallback: try packaged resource papers_qa/metadata.jsonl
+        try:
+            with resources.files("papers_qa").joinpath("metadata.jsonl").open("r", encoding="utf-8") as f:
+                items: List[Tuple[str, str, str]] = []
+                for line in f:
+                    obj = json.loads(line)
+                    items.append((obj["file"], obj["section"], obj["chunk"]))
+                self._metadata = items
+                return items
+        except FileNotFoundError:
+            pass
+        raise FileNotFoundError(f"Metadata file not found: {self.metadata_path}")
 
     def retrieve(self, query_vec: np.ndarray, top_k: int = TOP_K) -> Tuple[np.ndarray, np.ndarray]:
         index = self.load_index()

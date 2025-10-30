@@ -48,23 +48,63 @@ class OllamaClient:
         except requests.RequestException as e:
             raise RuntimeError(f"Ollama streaming failed: {e}") from e
 
-    def ensure_ready(self) -> None:
-        """Ensure Ollama daemon and model are available."""
+
+    def ensure_ready(self, timeout: int = 60, interval: float = 0.5) -> None:
+        """Ensure Ollama daemon is available and print progress timeline."""
         if self._is_up():
-            self._ensure_model_present()
+            print("[✓] Ollama daemon already running.")
             return
+
+        print("[…] Starting Ollama daemon...")
         self._start_daemon()
-        deadline = time.time() + 60
-        while time.time() < deadline:
+
+        end_time = time.time() + timeout
+        start_time = time.time()
+        while time.time() < end_time:
+            elapsed = time.time() - start_time
             if self._is_up():
-                self._ensure_model_present()
+                print(f"[✓] Ollama daemon is up after {elapsed:.1f}s.")
                 return
-            time.sleep(0.5)
-        raise RuntimeError("Failed to start Ollama daemon.")
+            print(f"[…] Waiting for daemon... ({elapsed:.1f}s elapsed)")
+            time.sleep(interval)
+
+        raise RuntimeError(f"[✗] Ollama daemon failed to start after {timeout}s.")
 
     def ensure_model(self, model: str) -> None:
-        """Ensure a specific model is available locally (pull if missing)."""
-        self._ensure_model_present(model)
+        """Ensure model is available locally (pull if missing)."""
+        try:
+            resp = requests.get(f"{self.host}/api/tags", timeout=10)
+            resp.raise_for_status()
+            if any(m.get("name") == model for m in resp.json().get("models", [])):
+                return
+        except requests.RequestException:
+            print(f"[…] Checking model '{model}' failed, will try pulling...")
+
+        print(f"[→] Pulling model '{model}'...")
+        try:
+            with requests.post(
+                f"{self.host}/api/pull",
+                json={"model": model, "stream": True},
+                timeout=1800,
+                stream=True,
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    status = obj.get("status")
+                    completed, total = obj.get("completed"), obj.get("total")
+                    if isinstance(completed, int) and isinstance(total, int) and total > 0:
+                        pct = int((completed / total) * 100)
+                        print(f"\r[→] {status or 'pulling'} {pct}%", end="", flush=True)
+                print("\n[✓] Pull complete.")
+        except requests.RequestException as e:
+            raise RuntimeError(f"[✗] Failed to pull model '{model}': {e}")
+   
 
     def _is_up(self) -> bool:
         try:
@@ -92,6 +132,7 @@ class OllamaClient:
                 return
         except requests.RequestException:
             pass
+        # Fallback: silent pull without progress
         resp = requests.post(
             f"{self.host}/api/pull",
             json={"model": self.model, "stream": False},
