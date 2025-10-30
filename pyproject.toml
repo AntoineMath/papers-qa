@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "papers-qa"
+version = "0.1.0"
+description = "PDF Q&A CLI using FAISS retrieval and Ollama Qwen generation"
+authors = ["Antoine Mathurin <antoine.mathurin.pro@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "papers_qa" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+typer = ">=0.12.3"
+requests = ">=2.31.0"
+numpy = ">=1.26.0"
+faiss-cpu = ">=1.7.4"
+python-dotenv = ">=1.0.1"
+openai = ">=1.47.0"
+PyPDF2 = ">=3.0.1"
+tiktoken = ">=0.7.0"
+tqdm = ">=4.66.0"
+
+[tool.poetry.scripts]
+papers-qa = "papers_qa.cli:app"
+
+[build-system]
+requires = ["poetry-core>=1.8.0"]
+build-backend = "poetry.core.masonry.api"
+
+
